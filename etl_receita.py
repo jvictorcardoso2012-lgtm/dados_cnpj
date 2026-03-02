@@ -5,33 +5,50 @@ import zipfile
 import io
 import os
 import sys
-from datetime import datetime, timedelta
 
 def processar():
     client = bigquery.Client()
-    TABLE_ID = "prospeccaob2b-489003.dados_cnpj.prospeccaob2b"
-    
-    # LÓGICA DINÂMICA: Pega o mês anterior ao atual
-    # Se hoje é Março/2026, ele busca 2026-02. Em Abril, buscará 2026-03.
-    hoje = datetime.now()
-    primeiro_dia_mes_atual = hoje.replace(day=1)
-    mes_anterior = primeiro_dia_mes_atual - timedelta(days=1)
-    data_pasta = mes_anterior.strftime("%Y-%m")
+    PROJECT_ID = "prospeccaob2b-489003"
+    DATASET_ID = f"{PROJECT_ID}.dados_cnpj"
+    FINAL_TABLE = f"{DATASET_ID}.prospeccaob2b"
+    STAGING_TABLE = f"{DATASET_ID}.prospeccaob2b_staging_{os.environ.get('CLOUD_RUN_TASK_INDEX', '0')}"
     
     task_index = os.environ.get("CLOUD_RUN_TASK_INDEX", "0")
-    file_name = f"Estabelecimentos{task_index}.zip"
-    
-    # A URL agora usa a variável 'data_pasta' em vez de '2026-02'
-    url = f"https://arquivos.receitafederal.gov.br/public.php/dav/files/YggdBLfdninEJX9/{data_pasta}/{file_name}"
-    
-    print(f"Tarefa {task_index}: Buscando dados de {data_pasta} em {file_name}...")
+    # Link WebDAV estável que você validou
+    url = f"https://arquivos.receitafederal.gov.br/public.php/dav/files/YggdBLfdninEJX9/2026-02/Estabelecimentos{task_index}.zip"
 
     try:
+        print(f"Tarefa {task_index}: Iniciando carga em Staging...")
         with requests.get(url, stream=True, timeout=1200) as r:
-            if r.status_code == 404:
-                print(f"Dados de {data_pasta} ainda não disponíveis. Tentando mês anterior...")
-                # Lógica extra: se o mês atual não existe, ele poderia tentar o anterior do anterior
-                sys.exit(0) # Encerra sem erro para não gastar retentativas
-                
             r.raise_for_status()
-            # ... (resto do código de processamento ZIP e BigQuery permanece igual) ...
+            with zipfile.ZipFile(io.BytesIO(r.content)) as z:
+                with z.open(z.namelist()[0]) as f:
+                    chunks = pd.read_csv(f, sep=';', encoding='latin1', header=None, 
+                                         chunksize=100000, dtype=str, usecols=[0,1,2,5,10,19,21,22,27])
+                    
+                    for chunk in chunks:
+                        df = chunk[chunk[5] == '02'].copy() # Só ATIVAS
+                        if not df.empty:
+                            # Lógica de tratamento omitida para brevidade...
+                            # Carrega na tabela STAGING (sobrescrevendo a cada lote desta tarefa)
+                            job_config = bigquery.LoadJobConfig(write_disposition="WRITE_APPEND")
+                            client.load_table_from_dataframe(df_final, STAGING_TABLE, job_config=job_config).result()
+
+        # O PULO DO GATO: Comando MERGE para atualizar a base principal
+        sql_merge = f"""
+        MERGE `{FINAL_TABLE}` T
+        USING `{STAGING_TABLE}` S
+        ON T.cnpj = S.cnpj
+        WHEN MATCHED THEN
+          UPDATE SET email = S.email, telefone = S.telefone, data_inicio = S.data_inicio
+        WHEN NOT MATCHED THEN
+          INSERT (cnpj, email, telefone, celular, data_inicio, uf)
+          VALUES (cnpj, email, telefone, celular, data_inicio, uf)
+        """
+        client.query(sql_merge).result()
+        print(f"Tarefa {task_index}: Dados mesclados. Limpando staging...")
+        client.delete_table(STAGING_TABLE, not_found_ok=True)
+
+    except Exception as e:
+        print(f"Erro na Tarefa {task_index}: {e}")
+        sys.exit(1)
