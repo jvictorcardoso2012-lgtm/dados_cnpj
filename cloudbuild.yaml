@@ -4,4 +4,4 @@ steps:
 images:
 - 'gcr.io/prospeccaob2b-489003/dados_cnpj_image:latest'
 options:
-  defaultLogsBucketBehavior: CLOUD_LOGGING_ONLY
+  defaultLogsBucketBehavior: REGIONAL_USER_OWNED_BUCKET
