@@ -1,0 +1,9 @@
+cat <<EOF > cloudbuild.yaml
+steps:
+- name: 'gcr.io/cloud-builders/docker'
+  args: ['build', '-t', 'gcr.io/prospeccaob2b-489003/dados_cnpj_image:latest', '.']
+images:
+- 'gcr.io/prospeccaob2b-489003/dados_cnpj_image:latest'
+options:
+  logging: CLOUD_LOGGING_ONLY
+EOF
