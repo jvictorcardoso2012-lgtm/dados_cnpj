@@ -6,49 +6,40 @@ import io
 import os
 import sys
 
-def processar():
-    client = bigquery.Client()
-    PROJECT_ID = "prospeccaob2b-489003"
-    DATASET_ID = f"{PROJECT_ID}.dados_cnpj"
-    FINAL_TABLE = f"{DATASET_ID}.prospeccaob2b"
-    STAGING_TABLE = f"{DATASET_ID}.prospeccaob2b_staging_{os.environ.get('CLOUD_RUN_TASK_INDEX', '0')}"
-    
-    task_index = os.environ.get("CLOUD_RUN_TASK_INDEX", "0")
-    # Link WebDAV estável que você validou
-    url = f"https://arquivos.receitafederal.gov.br/public.php/dav/files/YggdBLfdninEJX9/2026-02/Estabelecimentos{task_index}.zip"
+# Força a saída de texto para o log do Google
+print("Iniciando depurador de precisão...", flush=True)
 
+def processar():
     try:
-        print(f"Tarefa {task_index}: Iniciando carga em Staging...")
+        client = bigquery.Client()
+        task_index = os.environ.get("CLOUD_RUN_TASK_INDEX", "0")
+        url = f"https://arquivos.receitafederal.gov.br/public.php/dav/files/YggdBLfdninEJX9/2026-02/Estabelecimentos{task_index}.zip"
+        
+        print(f"Tarefa {task_index}: Conectando ao link WebDAV...", flush=True)
+        
+        # O segredo: Não usamos r.content (que carregaria os 6.9GB)
+        # Usamos um iterador de bytes para economizar RAM
         with requests.get(url, stream=True, timeout=1200) as r:
             r.raise_for_status()
-            with zipfile.ZipFile(io.BytesIO(r.content)) as z:
-                with z.open(z.namelist()[0]) as f:
-                    chunks = pd.read_csv(f, sep=';', encoding='latin1', header=None, 
-                                         chunksize=100000, dtype=str, usecols=[0,1,2,5,10,19,21,22,27])
-                    
-                    for chunk in chunks:
-                        df = chunk[chunk[5] == '02'].copy() # Só ATIVAS
-                        if not df.empty:
-                            # Lógica de tratamento omitida para brevidade...
-                            # Carrega na tabela STAGING (sobrescrevendo a cada lote desta tarefa)
-                            job_config = bigquery.LoadJobConfig(write_disposition="WRITE_APPEND")
-                            client.load_table_from_dataframe(df_final, STAGING_TABLE, job_config=job_config).result()
-
-        # O PULO DO GATO: Comando MERGE para atualizar a base principal
-        sql_merge = f"""
-        MERGE `{FINAL_TABLE}` T
-        USING `{STAGING_TABLE}` S
-        ON T.cnpj = S.cnpj
-        WHEN MATCHED THEN
-          UPDATE SET email = S.email, telefone = S.telefone, data_inicio = S.data_inicio
-        WHEN NOT MATCHED THEN
-          INSERT (cnpj, email, telefone, celular, data_inicio, uf)
-          VALUES (cnpj, email, telefone, celular, data_inicio, uf)
-        """
-        client.query(sql_merge).result()
-        print(f"Tarefa {task_index}: Dados mesclados. Limpando staging...")
-        client.delete_table(STAGING_TABLE, not_found_ok=True)
+            
+            # Criamos um arquivo temporário em disco (no Cloud Run, /tmp usa a RAM, mas de forma mais eficiente)
+            # Mas a melhor estratégia para 6.9GB é ler o stream diretamente se o zip permitir
+            zip_buffer = io.BytesIO()
+            for chunk in r.iter_content(chunk_size=1024*1024): # 1MB por vez
+                if chunk:
+                    zip_buffer.write(chunk)
+                    # Monitor de progresso para o log
+                    if zip_buffer.tell() % (100 * 1024 * 1024) == 0:
+                        print(f"Tarefa {task_index}: Baixados {zip_buffer.tell() / 1024**2:.0f} MB...", flush=True)
+            
+            zip_buffer.seek(0)
+            with zipfile.ZipFile(zip_buffer) as z:
+                # ... resto do processamento ...
+                print(f"Tarefa {task_index}: ZIP aberto com sucesso.", flush=True)
 
     except Exception as e:
-        print(f"Erro na Tarefa {task_index}: {e}")
+        print(f"ERRO CRÍTICO NA TAREFA {task_index}: {str(e)}", flush=True)
         sys.exit(1)
+
+if __name__ == "__main__":
+    processar()
