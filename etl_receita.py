@@ -1,37 +1,34 @@
-import pandas as pd
-from google.cloud import bigquery
+import datetime
 import requests
-import zipfile
-import io
-import os
-import sys
-from datetime import datetime, timedelta
 
 def get_valid_url(task_index):
-    # Tenta primeiro o mês atual, depois o anterior
-    for i in range(2):
-        data = (datetime.now() - timedelta(days=30*i)).strftime("%Y-%m")
+    hoje = datetime.datetime.now()
+    
+    # Gera uma lista exata dos últimos 3 meses (ex: ['2026-03', '2026-02', '2026-01'])
+    datas_para_testar = []
+    for i in range(3):
+        mes = hoje.month - i
+        ano = hoje.year
+        if mes <= 0:
+            mes += 12
+            ano -= 1
+        datas_para_testar.append(f"{ano}-{mes:02d}")
+        
+    # Testa cada mês gerado
+    for data in datas_para_testar:
         url = f"https://arquivos.receitafederal.gov.br/public.php/dav/files/YggdBLfdninEJX9/{data}/Estabelecimentos{task_index}.zip"
         
-        print(f"Testando data {data}...", flush=True)
+        print(f"Tarefa {task_index}: Simulando link -> {url}", flush=True)
         try:
+            # Pede só o cabeçalho para ver se o arquivo existe (rápido e sem gastar RAM)
             r = requests.head(url, timeout=30)
             if r.status_code == 200:
-                print(f"Sucesso! Usando pasta {data}", flush=True)
+                print(f"Tarefa {task_index}: BINGO! Pasta {data} encontrada e validada.", flush=True)
                 return url, data
-        except:
+            else:
+                print(f"Tarefa {task_index}: Status {r.status_code} na pasta {data}. Tentando o mês anterior...", flush=True)
+        except Exception as e:
+            print(f"Tarefa {task_index}: Erro de conexão ao testar {data}: {e}", flush=True)
             continue
+            
     return None, None
-
-def processar():
-    client = bigquery.Client()
-    task_index = os.environ.get("CLOUD_RUN_TASK_INDEX", "0")
-    
-    url, data_encontrada = get_valid_url(task_index)
-    
-    if not url:
-        print("Erro: Nenhuma pasta de dados encontrada no servidor.", flush=True)
-        sys.exit(1)
-
-    print(f"Tarefa {task_index}: Processando {data_encontrada}...", flush=True)
-    # ... resto do código de extração (MERGE e Chunks) permanece igual ...
