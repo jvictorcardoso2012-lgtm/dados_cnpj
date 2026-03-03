@@ -1,95 +1,59 @@
-import pandas as pd
-from google.cloud import bigquery
-import requests
-import zipfile
-import io
 import os
-import sys
-import datetime
+import io
+import zipfile
+import requests
+import pandas as pd
+from datetime import datetime
+from google.cloud import bigquery
 
-def get_valid_url(task_index):
-    hoje = datetime.datetime.now()
-    datas_para_testar = []
-    
-    # Gera os últimos 3 meses para garantir que sempre ache o arquivo
-    for i in range(3):
-        mes = hoje.month - i
-        ano = hoje.year
-        if mes <= 0:
-            mes += 12
-            ano -= 1
-        datas_para_testar.append(f"{ano}-{mes:02d}")
-        
-    for data in datas_para_testar:
-        url = f"https://arquivos.receitafederal.gov.br/public.php/dav/files/YggdBLfdninEJX9/{data}/Estabelecimentos{task_index}.zip"
-        print(f"Tarefa {task_index}: Simulando link -> {url}", flush=True)
-        try:
-            r = requests.head(url, timeout=30)
-            if r.status_code == 200:
-                print(f"Tarefa {task_index}: BINGO! Pasta {data} encontrada.", flush=True)
-                return url, data
-        except:
-            continue
-    return None, None
+client = bigquery.Client(project="prospeccaob2b-489003")
+task_index = int(os.environ.get("CLOUD_RUN_TASK_INDEX", 0))
 
-def processar():
-    client = bigquery.Client()
-    task_index = os.environ.get("CLOUD_RUN_TASK_INDEX", "0")
-    
-    url, data_encontrada = get_valid_url(task_index)
-    
-    if not url:
-        print(f"Tarefa {task_index}: Erro crítico. Nenhuma pasta encontrada no servidor.", flush=True)
-        sys.exit(1)
+# --- LÓGICA DE DATA PRECISA ---
+hoje = datetime.now()
+# Busca sempre o mês anterior (Ex: Em Março/2026, busca 2026-02)
+mes_ref = hoje.month - 1
+ano_ref = hoje.year
+if mes_ref <= 0:
+    mes_ref = 12
+    ano_ref -= 1
 
-    print(f"Tarefa {task_index}: Baixando arquivo da Receita...", flush=True)
-    
+DATA_MES = f"{ano_ref}-{mes_ref:02d}"
+URL_BASE = f"https://arquivos.receitafederal.gov.br/public.php/dav/files/YggdBLfdninEJX9/{DATA_MES}"
+
+print(f"Iniciando Robô {task_index} para a base de {DATA_MES}...")
+
+def carregar_dados(url, tabela, colunas, nomes_colunas):
     try:
-        # Download seguro para a memória
-        r = requests.get(url, stream=True, timeout=1800)
-        r.raise_for_status()
-        
-        zip_buffer = io.BytesIO()
-        for chunk in r.iter_content(chunk_size=8192):
-            zip_buffer.write(chunk)
-        
-        with zipfile.ZipFile(zip_buffer) as z:
-            nome_interno = z.namelist()[0]
-            print(f"Tarefa {task_index}: Lendo arquivo CSV {nome_interno}...", flush=True)
-            
-            with z.open(nome_interno) as f:
-                # Processamento em lotes de 50 mil linhas para garantir velocidade e estabilidade
-                chunks = pd.read_csv(f, sep=';', encoding='latin1', header=None, chunksize=50000, dtype=str)
-                
-                for i, chunk in enumerate(chunks):
-                    # Filtro vital: Apenas empresas ATIVAS (02)
-                    df = chunk[chunk[5] == '02'].copy()
-                    
-                    if not df.empty:
-                        # O mapeamento exato para a sua tabela no BigQuery
-                        df['cnpj'] = df[0].fillna('') + df[1].fillna('') + df[2].fillna('')
-                        df['email'] = df[27].fillna('')
-                        df['telefone'] = df[21].fillna('') + df[22].fillna('')
-                        df['celular'] = df[23].fillna('') + df[24].fillna('')
-                        df['uf'] = df[19].fillna('')
-                        df['data_inicio'] = pd.to_datetime(df[10], format='%Y%m%d', errors='coerce').dt.date
+        r = requests.get(url, stream=True, timeout=300)
+        if r.status_code == 200:
+            with zipfile.ZipFile(io.BytesIO(r.content)) as z:
+                with z.open(z.namelist()[0]) as f:
+                    chunks = pd.read_csv(f, sep=';', encoding='latin1', header=None, chunksize=50000, dtype=str, usecols=colunas)
+                    for chunk in chunks:
+                        df = pd.DataFrame()
+                        for i, nome in enumerate(nomes_colunas):
+                            # Se for Estabelecimentos, fazemos a junção do CNPJ (0,1,2)
+                            if nome == 'cnpj' and len(colunas) > 5:
+                                df['cnpj'] = chunk[0].fillna('') + chunk[1].fillna('') + chunk[2].fillna('')
+                            else:
+                                df[nome] = chunk[colunas[i]].fillna('')
                         
-                        # Seleciona apenas as colunas que importam
-                        df_final = df[['cnpj', 'email', 'telefone', 'celular', 'data_inicio', 'uf']]
-                        
-                        # Adiciona os dados no banco sem apagar os anteriores
-                        job_config = bigquery.LoadJobConfig(write_disposition="WRITE_APPEND")
-                        client.load_table_from_dataframe(
-                            df_final, 
-                            "prospeccaob2b-489003.dados_cnpj.prospeccaob2b", 
-                            job_config=job_config
-                        ).result()
-                        
-                        print(f"Tarefa {task_index}: Lote {i} ({len(df_final)} empresas) SALVO no banco de dados!", flush=True)
-                        
+                        # Tratamento específico para Capital Social (transformar em float)
+                        if 'capital_social' in df.columns:
+                            df['capital_social'] = df['capital_social'].str.replace(',', '.').astype(float)
+                            
+                        client.load_table_from_dataframe(df, f"prospeccaob2b-489003.dados_cnpj.{tabela}", 
+                            job_config=bigquery.LoadJobConfig(write_disposition="WRITE_APPEND")).result()
     except Exception as e:
-        print(f"Tarefa {task_index}: ERRO FATAL - {str(e)}", flush=True)
-        sys.exit(1)
+        print(f"Erro ao processar {url}: {e}")
 
-if __name__ == "__main__":
-    processar()
+# Execução das frentes
+carregar_dados(f"{URL_BASE}/Empresas{task_index}.zip", "raw_empresas", [0, 1, 4], ['cnpj_base', 'razao_social', 'capital_social'])
+carregar_dados(f"{URL_BASE}/Estabelecimentos{task_index}.zip", "raw_estabelecimentos", 
+              [0, 1, 2, 4, 5, 10, 11, 13, 15, 19, 20, 21, 22, 23, 24, 27], 
+              ['cnpj', 'fantasia', 'fantasia2', 'nome_fantasia', 'situacao', 'data_inicio', 'cnae', 'logradouro', 'bairro', 'uf', 'mun', 'tel1', 'tel2', 'tel3', 'tel4', 'email'])
+
+if task_index == 0:
+    carregar_dados(f"{URL_BASE}/Cnaes.zip", "raw_cnaes", [0, 1], ['id_cnae', 'descricao'])
+    carregar_dados(f"{URL_BASE}/Municipios.zip", "raw_municipios", [0, 1], ['id_municipio', 'descricao'])
