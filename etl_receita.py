@@ -35,7 +35,7 @@ def carregar_dados_v2(url, tabela, colunas, nomes_colunas):
                             df['capital_social'] = df['capital_social'].str.replace(',', '.').astype(float)
                         
                         # Salvando como _v2 para staging seguro
-                        client.load_table_from_dataframe(df, f"prospeccaob2b-489003.dados_cnpj.{tabela}_v2", 
+                        client.load_table_from_dataframe(df, f"prospeccaob2b-489003.dados_cnpj.{tabela}", 
                             job_config=bigquery.LoadJobConfig(write_disposition="WRITE_APPEND")).result()
     except Exception as e: 
         import traceback
