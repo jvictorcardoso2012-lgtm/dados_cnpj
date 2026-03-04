@@ -37,7 +37,10 @@ def carregar_dados_v2(url, tabela, colunas, nomes_colunas):
                         # Salvando como _v2 para staging seguro
                         client.load_table_from_dataframe(df, f"prospeccaob2b-489003.dados_cnpj.{tabela}_v2", 
                             job_config=bigquery.LoadJobConfig(write_disposition="WRITE_APPEND")).result()
-    except Exception as e: print(f"Erro: {e}")
+    except Exception as e: 
+        import traceback
+        print(f"ERRO CRÍTICO na tabela {tabela}: {e}")
+        traceback.print_exc()
 
 # EMPRESAS: Agora com Natureza (2) e Porte (5)
 carregar_dados_v2(f"{URL_BASE}/Empresas{task_index}.zip", "raw_empresas", 
