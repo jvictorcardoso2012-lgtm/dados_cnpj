@@ -113,12 +113,11 @@ def carregar_dados_permanente(url, tabela, colunas, nomes_colunas):
 # GATILHO DE EXECUÇÃO
 # ==========================================
 if str(task_index) in tasks_permitidas:
-    carregar_dados_permanente(f"{URL_BASE}/Empresas{task_index}.zip", "raw_empresas", [0, 1, 4, 5], ['cnpj_base', 'razao_social', 'capital_social', 'porte'])
-    carregar_dados_permanente(f"{URL_BASE}/Estabelecimentos{task_index}.zip", "raw_estabelecimentos", [0, 1, 2, 3, 4, 5, 10, 11, 12, 13, 14, 15, 17, 19, 21, 22, 23, 24, 25, 27], ['cnpj_base', 'cnpj_ordem', 'cnpj_dv', 'matriz_filial', 'nome_fantasia', 'situacao', 'data_inicio', 'cnae_principal', 'cnae_secundario', 'tipo_logradouro', 'logradouro_nome', 'numero', 'bairro', 'uf', 'mun_id', 'ddd1', 'tel1', 'ddd2', 'tel2', 'email'])
-
+    # carregar_dados_permanente(f"{URL_BASE}/Empresas{task_index}.zip", "raw_empresas", [0, 1, 4, 5], ['cnpj_base', 'razao_social', 'capital_social', 'porte'])
+    carregar_dados_permanente(f"{URL_BASE}/Estabelecimentos{task_index}.zip", "raw_estabelecimentos", [0, 1, 2, 3, 4, 5, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 27], ['cnpj_base', 'cnpj_ordem', 'cnpj_dv', 'matriz_filial', 'nome_fantasia', 'situacao', 'data_inicio', 'cnae_principal', 'cnae_secundario', 'tipo_logradouro', 'logradouro_nome', 'numero', 'complemento', 'bairro', 'cep', 'uf', 'mun_id', 'ddd1', 'tel1', 'ddd2', 'tel2', 'email'])
     if task_index == 0:
-        carregar_dados_permanente(f"{URL_BASE}/Simples.zip", "raw_simples", [0, 4], ['cnpj_base', 'opcao_mei'])
-        carregar_dados_permanente(f"{URL_BASE}/Cnaes.zip", "raw_cnaes", [0, 1], ['id_cnae', 'descricao'])
-        carregar_dados_permanente(f"{URL_BASE}/Municipios.zip", "raw_municipios", [0, 1], ['id_municipio', 'descricao'])
+       # carregar_dados_permanente(f"{URL_BASE}/Simples.zip", "raw_simples", [0, 4], ['cnpj_base', 'opcao_mei'])
+       # carregar_dados_permanente(f"{URL_BASE}/Cnaes.zip", "raw_cnaes", [0, 1], ['id_cnae', 'descricao'])
+       # carregar_dados_permanente(f"{URL_BASE}/Municipios.zip", "raw_municipios", [0, 1], ['id_municipio', 'descricao'])
 else:
     print(f"Task {task_index} pulada conforme configuração de TASKS_ATIVAS.")
