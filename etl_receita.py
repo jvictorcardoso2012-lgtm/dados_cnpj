@@ -12,7 +12,7 @@ mes_ref = hoje.month - 1
 ano_ref = hoje.year
 if mes_ref <= 0: mes_ref = 12; ano_ref -= 1
 DATA_MES = f"{ano_ref}-{mes_ref:02d}"
-URL_BASE = f"https://arquivos.receitafederal.gov.br/public.php/dav/files/YggdBLfdninEJX9?dir=/{DATA_MES}"
+URL_BASE = f"https://arquivos.receitafederal.gov.br/public.php/dav/files/YggdBLfdninEJX9/{DATA_MES}"
 
 def carregar_dados_v2(url, tabela, colunas, nomes_colunas):
     print(f"DEBUG: Tentando baixar de: {url}")
