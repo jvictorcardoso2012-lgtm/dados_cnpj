@@ -1,19 +1,18 @@
-import os, io, zipfile, requests, shutil
+import os, io, zipfile, requests
 import pandas as pd
 from datetime import datetime
 from google.cloud import bigquery
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 
-# Configuração de persistência extrema
+# Persistência de conexão para evitar quedas
 session = requests.Session()
-retry = Retry(total=10, backoff_factor=2, status_forcelist=[500, 502, 503, 504])
+retry = Retry(total=5, backoff_factor=2, status_forcelist=[500, 502, 503, 504])
 session.mount('https://', HTTPAdapter(max_retries=retry))
 
 client = bigquery.Client(project="prospeccaob2b-489003")
 task_index = int(os.environ.get("CLOUD_RUN_TASK_INDEX", 0))
 
-# Lógica de data RFB
 hoje = datetime.now()
 mes_ref = hoje.month - 1
 ano_ref = hoje.year
@@ -22,28 +21,27 @@ DATA_MES = f"{ano_ref}-{mes_ref:02d}"
 URL_BASE = f"https://arquivos.receitafederal.gov.br/public.php/dav/files/YggdBLfdninEJX9/{DATA_MES}"
 
 def carregar_dados(url, tabela, colunas, nomes_colunas):
-    print(f"🚀 Task {task_index}: Iniciando {tabela}...")
+    print(f"🚀 Task {task_index}: Processando {tabela}...")
     try:
-        # Stream=True para evitar o IncompleteRead
+        # Stream=True + iter_content resolve o IncompleteRead
         with session.get(url, stream=True, timeout=900) as r:
             r.raise_for_status()
             buffer = io.BytesIO()
-            # Baixa em pedaços para não quebrar a conexão
-            for chunk in r.iter_content(chunk_size=8192):
-                if chunk: buffer.write(chunk)
+            for chunk_bits in r.iter_content(chunk_size=1024*1024): # 1MB por vez no download
+                if chunk_bits: buffer.write(chunk_bits)
             
             buffer.seek(0)
             with zipfile.ZipFile(buffer) as z:
                 with z.open(z.namelist()[0]) as f:
-                    # Lógica de chunks para o BigQuery
-                    chunks = pd.read_csv(f, sep=';', encoding='latin1', header=None, chunksize=250000, dtype=str, usecols=colunas)
+                    # chunksize de 1 milhão: Equilíbrio entre 429 e RAM de 8GB
+                    chunks = pd.read_csv(f, sep=';', encoding='latin1', header=None, chunksize=1000000, dtype=str, usecols=colunas)
                     
                     for i, df_chunk in enumerate(chunks):
                         df_temp = pd.DataFrame()
                         for idx, nome in enumerate(nomes_colunas):
                             val = df_chunk[colunas[idx]].fillna('')
                             
-                            # Limpeza de Símbolos (Custo Zero)
+                            # Limpeza de Símbolos (Custo Zero de Armazenamento)
                             if nome in ['cnpj_base', 'cnpj_ordem', 'cnpj_dv', 'tel1', 'tel2', 'ddd1', 'ddd2']:
                                 df_temp[nome] = val.str.replace(r'[^0-9]', '', regex=True)
                             elif nome == 'capital_social':
@@ -51,15 +49,15 @@ def carregar_dados(url, tabela, colunas, nomes_colunas):
                             else:
                                 df_temp[nome] = val
                         
-                        # Upload imediato do chunk para economizar RAM
+                        # Upload do pedaço consolidado
+                        print(f"📤 Enviando bloco {i} de {tabela}...")
                         job_config = bigquery.LoadJobConfig(write_disposition="WRITE_APPEND")
                         client.load_table_from_dataframe(df_temp, f"prospeccaob2b-489003.dados_cnpj.{tabela}", job_config=job_config).result()
-                        print(f"✅ Chunk {i} de {tabela} enviado.")
 
     except Exception as e: 
         print(f"❌ ERRO na {tabela}: {e}")
 
-# Execução Milimétrica
+# Cargas Milimétricas
 carregar_dados(f"{URL_BASE}/Empresas{task_index}.zip", "raw_empresas", [0, 1, 4, 5], ['cnpj_base', 'razao_social', 'capital_social', 'porte'])
 
 carregar_dados(
